@@ -1,0 +1,142 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: virtual-kubelet
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: virtual-kubelet
+rules:
+- apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  - services
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - delete
+  - get
+  - list
+  - watch
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - nodes
+  verbs:
+  - create
+  - delete
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - nodes/status
+  verbs:
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - pods/status
+  verbs:
+  - update
+  - patch
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - patch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - get
+  - create
+  - update
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: virtual-kubelet
+subjects:
+- kind: ServiceAccount
+  name: virtual-kubelet
+  namespace: default
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: virtual-kubelet
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: virtual-node
+spec:
+  selector:
+    matchLabels:
+      app: virtual-node
+  template:
+    metadata:
+      labels:
+        app: virtual-node
+    spec:
+      serviceAccountName: virtual-kubelet
+      containers:
+      - name: jaeger-tracing
+        image: jaegertracing/all-in-one:1.22
+        resources:
+          limits:
+            memory: "256Mi"
+            cpu: "500m"
+      - name: vkubelet
+        image: joyme/virtual-kubelet:v1.6.0-mock
+        resources:
+          limits:
+            memory: "128Mi"
+            cpu: "500m"
+        imagePullPolicy: IfNotPresent
+        lifecycle:
+          preStop:
+            exec:
+              command: ["/bin/sh","-c","kubectl delete node ${DEFAULT_NODE_NAME}"]
+        args:
+        - /virtual-kubelet
+        - --provider
+        - mock
+        - --provider-config
+        - /vkubelet-mock-0-cfg.json
+        - --startup-timeout
+        - 10s
+        - --klog.v
+        - "2"
+        - --klog.logtostderr
+        - --log-level
+        - debug
+        - --trace-exporter
+        - jaeger
+        - --trace-sample-rate=always
+        env:
+        - name: JAEGER_AGENT_ENDPOINT
+          value: localhost:6831
+        - name: KUBELET_PORT
+          value: "10250"
+        - name: VKUBELET_POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: DEFAULT_NODE_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
